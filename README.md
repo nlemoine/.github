@@ -27,7 +27,8 @@ on:
     branches: [main]
   pull_request:
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +45,10 @@ jobs:
 PHP versions are resolved from `composer.json` — no `php-versions` input needed.
 Pin `@<full-commit-sha>` to a commit of this repository. Dependabot
 (`github-actions` ecosystem) bumps the SHA in each consuming repo.
+
+The caller must grant `permissions: contents: read`. The workflow's jobs request
+`contents: read`, and a caller that grants less (e.g. `permissions: {}`) fails at
+startup, because a called workflow cannot request more than the caller allows.
 
 For a WordPress project:
 
