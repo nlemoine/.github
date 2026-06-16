@@ -51,6 +51,18 @@ on:
         description: 'Run Infection mutation testing (advisory; not part of the aggregate gate).'
         type: boolean
         default: false
+      rector:
+        description: 'Rector dry-run: auto | true | false. auto = run when rector.php exists.'
+        type: string
+        default: 'auto'
+      type-coverage:
+        description: 'Run Pest type-coverage on the coverage leg (Pest projects only).'
+        type: boolean
+        default: false
+      type-coverage-min:
+        description: 'Minimum acceptable type-coverage percentage.'
+        type: string
+        default: '100'
       extra-cs-args:
         description: 'Extra arguments appended to the coding-standards command.'
         type: string
@@ -207,6 +219,38 @@ jobs:
           # shellcheck disable=SC2086 # intentional word-splitting of optional args
           vendor/bin/psalm --output-format=github --no-cache $EXTRA_ARGS
 
+  rector:
+    name: Rector
+    needs: resolve-versions
+    if: inputs.rector != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ inputs.static-php-version != '' && inputs.static-php-version || needs.resolve-versions.outputs.lowest }}
+          extensions: json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ inputs.composer-dependency-versions }}
+          composer-options: ${{ inputs.composer-options }}
+
+      - name: Run Rector
+        if: inputs.rector == 'true' || (inputs.rector == 'auto' && hashFiles('rector.php') != '')
+        run: vendor/bin/rector process --dry-run --no-progress-bar
+
   tests:
     name: Tests — PHP ${{ matrix.php }} (${{ matrix.dependency-versions }})
     needs: resolve-versions
@@ -264,6 +308,12 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Type coverage
+        if: ${{ inputs.type-coverage && matrix.dependency-versions == 'highest' && matrix.php == needs.resolve-versions.outputs.lowest }}
+        env:
+          MIN: ${{ inputs.type-coverage-min }}
+        run: vendor/bin/pest --type-coverage --min="$MIN"
+
   mutation-tests:
     name: Mutation tests (Infection)
     needs: resolve-versions
@@ -298,7 +348,7 @@ jobs:
   all-green:
     name: QA OK
     if: ${{ always() }}
-    needs: [resolve-versions, coding-standards, static-analysis, tests]
+    needs: [resolve-versions, coding-standards, static-analysis, rector, tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -65,9 +65,12 @@ For a WordPress project:
 | `cs-php-version` | `''` (resolved floor) | PHP version used for coding standards. |
 | `static-tool` | `auto` | `auto` (pick by config-file presence), `phpstan`, `psalm`, or `none`. |
 | `static-php-version` | `''` (resolved floor) | PHP version used for static analysis. |
+| `rector` | `auto` | `auto` (run when `rector.php` exists), `true`, or `false`. |
 | `composer-dependency-versions` | `highest` | `locked`, `lowest`, or `highest` for non-test jobs. |
 | `composer-options` | `--prefer-dist` | Extra options for composer install/update. |
 | `coverage` | `true` | Collect coverage on the floor leg and upload to Codecov. |
+| `type-coverage` | `false` | Run `pest --type-coverage` on the coverage leg (Pest only). |
+| `type-coverage-min` | `100` | Minimum type-coverage percentage. |
 | `run-infection` | `false` | Run Infection (advisory; not part of the gate). |
 | `extra-cs-args` | `''` | Extra arguments for the coding-standards command. |
 | `extra-stan-args` | `''` | Extra arguments for the static-analysis command. |
