@@ -1,0 +1,45 @@
+name: Release Please
+
+# Reusable release workflow. Runs release-please on push to the default branch
+# to maintain the release PR and cut releases. Call it with:
+#
+#   jobs:
+#     release:
+#       uses: nlemoine/.github/.github/workflows/release-please.yml@<sha>
+#     permissions:
+#       contents: write
+#       pull-requests: write
+
+on:
+  workflow_call:
+    inputs:
+      config-file:
+        description: 'Path to the release-please config file.'
+        type: string
+        default: 'release-please-config.json'
+      manifest-file:
+        description: 'Path to the release-please manifest file.'
+        type: string
+        default: '.release-please-manifest.json'
+    secrets:
+      token:
+        description: 'Optional token (e.g. a PAT) so release events trigger downstream workflows. Falls back to GITHUB_TOKEN.'
+        required: false
+
+permissions: {}
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # create release commits, tags and GitHub releases
+      pull-requests: write # open and update the release PR
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: ${{ inputs.config-file }}
+          manifest-file: ${{ inputs.manifest-file }}
+          token: ${{ secrets.token || github.token }}

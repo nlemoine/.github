@@ -107,3 +107,36 @@ For a WordPress project:
 Set the required status check in branch protection to **`QA OK`**. A
 `failure` or `cancelled` in coding standards, static analysis, or tests fails
 it; intentionally skipped jobs (e.g. `static-tool: none`) do not.
+
+## `release-please.yml` — reusable release workflow
+
+Runs [release-please](https://github.com/googleapis/release-please) on push to
+the default branch to maintain the release PR and cut releases. Add a caller at
+`.github/workflows/release.yml`:
+
+```yaml
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    uses: nlemoine/.github/.github/workflows/release-please.yml@<full-commit-sha>
+```
+
+The repo keeps owning `release-please-config.json` and
+`.release-please-manifest.json` (override the paths with the `config-file` /
+`manifest-file` inputs if needed). The caller must grant `contents: write` and
+`pull-requests: write`. By default it uses `GITHUB_TOKEN`; pass a PAT via
+`secrets: { token: ${{ secrets.RELEASE_TOKEN }} }` if you need release events to
+trigger downstream workflows.
