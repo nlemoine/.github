@@ -1,0 +1,315 @@
+name: PHP QA
+
+# Reusable PHP quality-assurance pipeline: resolves the PHP version matrix from
+# composer.json, then runs coding standards, static analysis, tests (matrix),
+# optional mutation testing, and a single aggregate status check.
+# Call it from a repo with:
+#
+#   jobs:
+#     qa:
+#       uses: nlemoine/.github/.github/workflows/php-qa.yml@<sha>
+#       with:
+#         cs-tool: php-cs-fixer
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      php-versions:
+        description: 'Optional JSON array override for the test matrix. Empty = resolve supported versions from composer.json.'
+        type: string
+        default: ''
+      cs-tool:
+        description: 'Coding-standards tool: phpcs | php-cs-fixer | ecs.'
+        type: string
+        default: 'php-cs-fixer'
+      cs-php-version:
+        description: 'PHP version for coding standards. Empty = resolved floor.'
+        type: string
+        default: ''
+      static-tool:
+        description: 'Static analysis: auto | phpstan | psalm | none. auto = pick by config-file presence.'
+        type: string
+        default: 'auto'
+      static-php-version:
+        description: 'PHP version for static analysis. Empty = resolved floor.'
+        type: string
+        default: ''
+      composer-dependency-versions:
+        description: 'Composer dependency resolution for non-test jobs: locked | lowest | highest.'
+        type: string
+        default: 'highest'
+      composer-options:
+        description: 'Extra options passed to composer install/update.'
+        type: string
+        default: '--prefer-dist'
+      coverage:
+        description: 'Collect coverage on the floor leg and upload to Codecov.'
+        type: boolean
+        default: true
+      run-infection:
+        description: 'Run Infection mutation testing (advisory; not part of the aggregate gate).'
+        type: boolean
+        default: false
+      extra-cs-args:
+        description: 'Extra arguments appended to the coding-standards command.'
+        type: string
+        default: ''
+      extra-stan-args:
+        description: 'Extra arguments appended to the static-analysis command.'
+        type: string
+        default: ''
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  resolve-versions:
+    name: Resolve PHP versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      versions: ${{ steps.pick.outputs.versions }}
+      lowest: ${{ steps.pick.outputs.lowest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Resolve supported versions from composer.json
+        id: range
+        if: inputs.php-versions == ''
+        uses: WyriHaximus/github-action-composer-php-versions-in-range@b1da538007a030a09a7d257bd3881829a3544882 # v2.1.0
+
+      - name: Select matrix
+        id: pick
+        env:
+          OVERRIDE: ${{ inputs.php-versions }}
+          RANGE_VERSIONS: ${{ steps.range.outputs.version }}
+          RANGE_LOWEST: ${{ steps.range.outputs.lowest }}
+        run: |
+          if [ -n "$OVERRIDE" ]; then
+            versions="$OVERRIDE"
+            lowest="$(printf '%s' "$OVERRIDE" | jq -r '.[0]')"
+          else
+            versions="$RANGE_VERSIONS"
+            lowest="$RANGE_LOWEST"
+          fi
+          {
+            echo "versions=$versions"
+            echo "lowest=$lowest"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved PHP versions: $versions (floor: $lowest)"
+
+  coding-standards:
+    name: Coding standards (${{ inputs.cs-tool }})
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ inputs.cs-php-version != '' && inputs.cs-php-version || needs.resolve-versions.outputs.lowest }}
+          extensions: json, mbstring
+          coverage: none
+          tools: composer:v2, cs2pr
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ inputs.composer-dependency-versions }}
+          composer-options: ${{ inputs.composer-options }}
+
+      - name: Run PHP_CodeSniffer
+        if: inputs.cs-tool == 'phpcs'
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-cs-args }}
+        run: |
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/phpcs -q --report=checkstyle $EXTRA_ARGS | cs2pr
+
+      - name: Run php-cs-fixer
+        if: inputs.cs-tool == 'php-cs-fixer'
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-cs-args }}
+        run: |
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/php-cs-fixer fix --dry-run --diff --format=checkstyle $EXTRA_ARGS | cs2pr
+
+      - name: Run ECS
+        if: inputs.cs-tool == 'ecs'
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-cs-args }}
+        run: |
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/ecs check --no-progress-bar --output-format=checkstyle $EXTRA_ARGS | cs2pr
+
+  static-analysis:
+    name: Static analysis
+    needs: resolve-versions
+    if: inputs.static-tool != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ inputs.static-php-version != '' && inputs.static-php-version || needs.resolve-versions.outputs.lowest }}
+          extensions: json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ inputs.composer-dependency-versions }}
+          composer-options: ${{ inputs.composer-options }}
+
+      - name: Run PHPStan
+        if: >-
+          inputs.static-tool == 'phpstan' ||
+          (inputs.static-tool == 'auto' &&
+           hashFiles('phpstan.neon', 'phpstan.neon.dist', 'phpstan.dist.neon') != '')
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-stan-args }}
+        run: |
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/phpstan analyse --no-progress --error-format=github $EXTRA_ARGS
+
+      - name: Run Psalm
+        if: >-
+          inputs.static-tool == 'psalm' ||
+          (inputs.static-tool == 'auto' &&
+           hashFiles('psalm.xml', 'psalm.xml.dist') != '')
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-stan-args }}
+        run: |
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/psalm --output-format=github --no-cache $EXTRA_ARGS
+
+  tests:
+    name: Tests — PHP ${{ matrix.php }} (${{ matrix.dependency-versions }})
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJson(needs.resolve-versions.outputs.versions) }}
+        dependency-versions: ['highest']
+        include:
+          - php: ${{ needs.resolve-versions.outputs.lowest }}
+            dependency-versions: 'lowest'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: json, mbstring
+          coverage: ${{ inputs.coverage && matrix.dependency-versions == 'highest' && matrix.php == needs.resolve-versions.outputs.lowest && 'pcov' || 'none' }}
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ matrix.dependency-versions }}
+          composer-options: ${{ inputs.composer-options }}
+
+      - name: Run tests
+        if: ${{ !(inputs.coverage && matrix.dependency-versions == 'highest' && matrix.php == needs.resolve-versions.outputs.lowest) }}
+        run: composer test
+
+      - name: Run tests with coverage
+        if: ${{ inputs.coverage && matrix.dependency-versions == 'highest' && matrix.php == needs.resolve-versions.outputs.lowest }}
+        run: |
+          if [ -f vendor/bin/pest ]; then
+            vendor/bin/pest --ci --coverage --coverage-clover=coverage.xml --min=0
+          else
+            vendor/bin/phpunit --coverage-clover=coverage.xml
+          fi
+
+      - name: Upload coverage to Codecov
+        if: ${{ inputs.coverage && matrix.dependency-versions == 'highest' && matrix.php == needs.resolve-versions.outputs.lowest }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  mutation-tests:
+    name: Mutation tests (Infection)
+    needs: resolve-versions
+    if: inputs.run-infection
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ inputs.static-php-version != '' && inputs.static-php-version || needs.resolve-versions.outputs.lowest }}
+          extensions: json, mbstring
+          coverage: xdebug
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ inputs.composer-dependency-versions }}
+          composer-options: ${{ inputs.composer-options }}
+
+      - name: Run Infection
+        run: vendor/bin/infection --threads=max --no-progress
+
+  all-green:
+    name: QA OK
+    if: ${{ always() }}
+    needs: [resolve-versions, coding-standards, static-analysis, tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check required jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Required job results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+              echo "::error::A required job reported '$result'"
+              exit 1
+            fi
+          done
