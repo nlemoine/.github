@@ -166,8 +166,10 @@ jobs:
         env:
           EXTRA_ARGS: ${{ inputs.extra-cs-args }}
         run: |
+          # ECS 13.3 removed the checkstyle output format, so there is
+          # nothing for cs2pr to read; rely on ECS's own exit code.
           # shellcheck disable=SC2086 # intentional word-splitting of optional args
-          vendor/bin/ecs check --no-progress-bar --output-format=checkstyle $EXTRA_ARGS | cs2pr
+          vendor/bin/ecs check --no-progress-bar $EXTRA_ARGS
 
   static-analysis:
     name: Static analysis
