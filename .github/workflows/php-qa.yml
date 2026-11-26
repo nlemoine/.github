@@ -107,11 +107,13 @@ jobs:
           RANGE_VERSIONS: ${{ steps.range.outputs.versions }}
           RANGE_LOWEST: ${{ steps.range.outputs.lowest }}
         run: |
+          # php-matrix-action emits pretty-printed (multi-line) JSON, which
+          # breaks the single-line GITHUB_OUTPUT format: compact it with jq.
           if [ -n "$OVERRIDE" ]; then
-            versions="$OVERRIDE"
+            versions="$(printf '%s' "$OVERRIDE" | jq -c '.')"
             lowest="$(printf '%s' "$OVERRIDE" | jq -r '.[0]')"
           else
-            versions="$RANGE_VERSIONS"
+            versions="$(printf '%s' "$RANGE_VERSIONS" | jq -c '.')"
             lowest="$RANGE_LOWEST"
           fi
           {
