@@ -12,7 +12,7 @@ It is DB-free: WordPress integration tests are out of scope.
 
 The PHP version matrix is derived from the consuming repo's `composer.json`
 `require.php` constraint (via
-[`WyriHaximus/github-action-composer-php-versions-in-range`](https://github.com/WyriHaximus/github-action-composer-php-versions-in-range)),
+[`typisttech/php-matrix-action`](https://github.com/typisttech/php-matrix-action)),
 so bumping supported PHP versions is a `composer.json` edit, not a CI edit.
 
 ### Usage

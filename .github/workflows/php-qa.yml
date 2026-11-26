@@ -91,18 +91,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          sparse-checkout: composer.json
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Resolve supported versions from composer.json
         id: range
         if: inputs.php-versions == ''
-        uses: WyriHaximus/github-action-composer-php-versions-in-range@b1da538007a030a09a7d257bd3881829a3544882 # v2.1.0
+        uses: typisttech/php-matrix-action@73b41f402280305866c655b5a2485d5c9d7a36bc # v4.0.0
 
       - name: Select matrix
         id: pick
         env:
           OVERRIDE: ${{ inputs.php-versions }}
-          RANGE_VERSIONS: ${{ steps.range.outputs.version }}
+          RANGE_VERSIONS: ${{ steps.range.outputs.versions }}
           RANGE_LOWEST: ${{ steps.range.outputs.lowest }}
         run: |
           if [ -n "$OVERRIDE" ]; then
