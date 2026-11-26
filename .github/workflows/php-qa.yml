@@ -43,6 +43,10 @@ on:
         description: 'Extra options passed to composer install/update.'
         type: string
         default: '--prefer-dist'
+      test-lowest:
+        description: 'Add a test leg with the lowest dependency versions on the floor PHP version.'
+        type: boolean
+        default: true
       coverage:
         description: 'Collect coverage on the floor leg and upload to Codecov.'
         type: boolean
@@ -269,9 +273,7 @@ jobs:
       matrix:
         php: ${{ fromJson(needs.resolve-versions.outputs.versions) }}
         dependency-versions: ['highest']
-        include:
-          - php: ${{ needs.resolve-versions.outputs.lowest }}
-            dependency-versions: 'lowest'
+        include: ${{ fromJson(inputs.test-lowest && format('[{{"php":"{0}","dependency-versions":"lowest"}}]', needs.resolve-versions.outputs.lowest) || '[]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
