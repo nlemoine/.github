@@ -73,12 +73,29 @@ For a WordPress project:
 | `rector` | `auto` | `auto` (run when `rector.php` exists), `true`, or `false`. |
 | `composer-dependency-versions` | `highest` | `locked`, `lowest`, or `highest` for non-test jobs. |
 | `composer-options` | `--prefer-dist` | Extra options for composer install/update. |
+| `composer-normalize` | `false` | Run `composer normalize --dry-run` in the coding-standards job (needs `ergebnis/composer-normalize`). |
+| `test-lowest` | `true` | Add a test leg with the `lowest` dependency versions on the floor PHP version. |
+| `extra-test-legs` | `[]` | JSON array of extra test legs, see below. |
 | `coverage` | `true` | Collect coverage on the floor leg and upload to Codecov. |
 | `type-coverage` | `false` | Run `pest --type-coverage` on the coverage leg (Pest only). |
 | `type-coverage-min` | `100` | Minimum type-coverage percentage. |
-| `run-infection` | `false` | Run Infection (advisory; not part of the gate). |
+| `run-infection` | `false` | Run Infection (advisory unless `infection-gate` is `true`). |
+| `infection-diff` | `false` | Mutate only the lines a pull request changes, with GitHub annotations. The job is skipped on other events. |
+| `infection-gate` | `false` | Count the Infection job in `QA OK`. |
+| `infection-setup-command` | `''` | Shell command run before Infection, for a test bootstrap that writes to STDERR on its first run (Infection aborts on that). |
+| `extra-infection-args` | `''` | Extra arguments for the Infection command. |
 | `extra-cs-args` | `''` | Extra arguments for the coding-standards command. |
 | `extra-stan-args` | `''` | Extra arguments for the static-analysis command. |
+
+### Extra test legs
+
+`extra-test-legs` adds test legs that the PHP matrix does not cover, such as a run against WordPress trunk. They run `composer test` in their own job, so they never merge into a regular leg. Each entry takes a `name`, and optionally `php` (default: the floor), `dependency-versions` (default: `highest`), `env` (variables for the test command) and `experimental` (a failing experimental leg shows a warning but does not fail `QA OK`).
+
+```yaml
+    with:
+      extra-test-legs: >-
+        [{"name": "WP trunk", "php": "8.4", "env": {"WP_VERSION": "trunk"}, "experimental": true}]
+```
 
 ### Secrets
 

@@ -51,8 +51,32 @@ on:
         description: 'Collect coverage on the floor leg and upload to Codecov.'
         type: boolean
         default: true
+      extra-test-legs:
+        description: 'JSON array of extra test legs, run in their own job. Each entry: {"name": "...", "php": "8.4", "env": {"KEY": "value"}, "dependency-versions": "highest", "experimental": false}. An experimental leg does not fail the gate.'
+        type: string
+        default: '[]'
       run-infection:
-        description: 'Run Infection mutation testing (advisory; not part of the aggregate gate).'
+        description: 'Run Infection mutation testing (advisory unless infection-gate is true).'
+        type: boolean
+        default: false
+      infection-diff:
+        description: 'Mutate only the lines a pull request changes, with GitHub annotations. The job is skipped on other events.'
+        type: boolean
+        default: false
+      infection-gate:
+        description: 'Make the Infection job part of the aggregate gate.'
+        type: boolean
+        default: false
+      infection-setup-command:
+        description: 'Shell command run before Infection, e.g. to warm up a test bootstrap that writes to STDERR on its first run.'
+        type: string
+        default: ''
+      extra-infection-args:
+        description: 'Extra arguments appended to the Infection command.'
+        type: string
+        default: ''
+      composer-normalize:
+        description: 'Check composer.json with composer normalize --dry-run (needs ergebnis/composer-normalize installed).'
         type: boolean
         default: false
       rector:
@@ -178,6 +202,10 @@ jobs:
           # nothing for cs2pr to read; rely on ECS's own exit code.
           # shellcheck disable=SC2086 # intentional word-splitting of optional args
           vendor/bin/ecs check --no-progress-bar $EXTRA_ARGS
+
+      - name: Run composer normalize
+        if: inputs.composer-normalize
+        run: composer normalize --dry-run
 
   static-analysis:
     name: Static analysis
@@ -322,10 +350,63 @@ jobs:
           MIN: ${{ inputs.type-coverage-min }}
         run: vendor/bin/pest --type-coverage --min="$MIN"
 
+  # Caller-defined legs (e.g. a WordPress trunk run) live in their own job:
+  # added to the main matrix through `include`, a leg whose php and
+  # dependency-versions match an existing combination would be merged into it
+  # instead of running on its own.
+  extra-tests:
+    name: Tests — ${{ matrix.name }}
+    needs: resolve-versions
+    if: inputs.extra-test-legs != '' && inputs.extra-test-legs != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.extra-test-legs) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: ${{ matrix.php || needs.resolve-versions.outputs.lowest }}
+          extensions: json, mbstring
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@65e4f84970763564f46a70b8a54b90d033b3bdda # 4.0.0
+        with:
+          dependency-versions: ${{ matrix.dependency-versions || 'highest' }}
+          composer-options: ${{ inputs.composer-options }}
+
+      # Step-level, so an experimental failure leaves the job (and the gate)
+      # green; the warning below keeps it visible.
+      - name: Run tests
+        id: run-tests
+        continue-on-error: ${{ matrix.experimental == true }}
+        env:
+          LEG_ENV: ${{ toJSON(matrix.env) }}
+        run: |
+          mapfile -t vars < <(jq -r '(. // {}) | to_entries[] | "\(.key)=\(.value)"' <<< "$LEG_ENV")
+          env "${vars[@]}" composer test
+
+      - name: Report experimental failure
+        if: steps.run-tests.outcome == 'failure'
+        env:
+          LEG: ${{ matrix.name }}
+        run: echo "::warning::Experimental test leg '$LEG' failed"
+
   mutation-tests:
     name: Mutation tests (Infection)
     needs: resolve-versions
-    if: inputs.run-infection
+    if: inputs.run-infection && (!inputs.infection-diff || github.event_name == 'pull_request')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -335,6 +416,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The diff mode compares against the base branch, which a shallow
+          # clone does not have. '0' is a string: a bare 0 is falsy and would
+          # fall through to the 1.
+          fetch-depth: ${{ inputs.infection-diff && '0' || '1' }}
 
       - name: Setup PHP
         uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
@@ -350,19 +435,47 @@ jobs:
           dependency-versions: ${{ inputs.composer-dependency-versions }}
           composer-options: ${{ inputs.composer-options }}
 
-      - name: Run Infection
-        run: vendor/bin/infection --threads=max --no-progress
+      # Infection aborts its initial test run on the first byte written to
+      # STDERR, so a bootstrap that reports a first-run install there (Mantle
+      # installing WordPress, for one) has to be warmed up beforehand.
+      - name: Run setup command
+        if: inputs.infection-setup-command != ''
+        env:
+          SETUP_COMMAND: ${{ inputs.infection-setup-command }}
+        run: bash -c "$SETUP_COMMAND"
 
+      - name: Run Infection
+        env:
+          DIFF: ${{ inputs.infection-diff }}
+          BASE_REF: ${{ github.base_ref }}
+          EXTRA_ARGS: ${{ inputs.extra-infection-args }}
+        run: |
+          args=(--threads=max --no-progress)
+          if [ "$DIFF" = "true" ]; then
+            args+=("--git-diff-base=origin/$BASE_REF" --git-diff-lines --logger-github)
+          fi
+          # shellcheck disable=SC2086 # intentional word-splitting of optional args
+          vendor/bin/infection "${args[@]}" $EXTRA_ARGS
+
+  # mutation-tests is always listed so infection-gate can count it; when the
+  # gate is off its result is ignored, but QA OK still waits for it.
   all-green:
     name: QA OK
     if: ${{ always() }}
-    needs: [resolve-versions, coding-standards, static-analysis, rector, tests]
+    needs: [resolve-versions, coding-standards, static-analysis, rector, tests, extra-tests, mutation-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check required jobs
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          RESULTS: >-
+            ${{ needs.resolve-versions.result }}
+            ${{ needs.coding-standards.result }}
+            ${{ needs.static-analysis.result }}
+            ${{ needs.rector.result }}
+            ${{ needs.tests.result }}
+            ${{ needs.extra-tests.result }}
+            ${{ inputs.infection-gate && needs.mutation-tests.result || 'skipped' }}
         run: |
           echo "Required job results: $RESULTS"
           for result in $RESULTS; do
