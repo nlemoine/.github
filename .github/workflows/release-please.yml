@@ -9,6 +9,9 @@ name: Release Please
 #     permissions:
 #       contents: write
 #       pull-requests: write
+#
+# Chain a job on a new release with needs.release.outputs.release_created
+# (and tag_name / version).
 
 on:
   workflow_call:
@@ -25,6 +28,16 @@ on:
       token:
         description: 'Optional token (e.g. a PAT) so release events trigger downstream workflows. Falls back to GITHUB_TOKEN.'
         required: false
+    outputs:
+      release_created:
+        description: "'true' when this run created a release."
+        value: ${{ jobs.release-please.outputs.release_created }}
+      tag_name:
+        description: 'Tag of the created release.'
+        value: ${{ jobs.release-please.outputs.tag_name }}
+      version:
+        description: 'Version of the created release.'
+        value: ${{ jobs.release-please.outputs.version }}
 
 permissions: {}
 
@@ -36,8 +49,13 @@ jobs:
     permissions:
       contents: write # create release commits, tags and GitHub releases
       pull-requests: write # open and update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
       - name: Run release-please
+        id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           config-file: ${{ inputs.config-file }}
